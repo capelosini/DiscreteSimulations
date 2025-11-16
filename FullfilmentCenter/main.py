@@ -1,4 +1,12 @@
+import DB
 import simpy
+from Classes import Customer
+
+Customer().addToDB()
+
+print(DB.DB)
+
+exit()
 
 
 def wait(env, duration):
