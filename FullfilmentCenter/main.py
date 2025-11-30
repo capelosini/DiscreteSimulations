@@ -1,7 +1,9 @@
+import random
+
 import simpy
-from Classes import Customer, Product, Seller
-from Storage import DB
-from Utils import *
+import Utils
+from Classes import Customer, Order, Product, Truck
+from Storage import DB, OrderStatus, TruckStatus
 
 db = DB()
 
@@ -9,30 +11,125 @@ db = DB()
 for _ in range(20):
     product = Product(db)
     product.addToDB()
+    print(product.__dict__)
 
 env = simpy.Environment()
-employees = simpy.Resource(env, capacity=2)
+employees = simpy.Resource(env, capacity=30)
+docks = simpy.Resource(env, capacity=6)
+
+logger = Utils.Logger(env)
+
+readyToShipOrders = []
 
 
-def process_order(order):
+def processOrder(order: Order):
+    while not Utils.isWorkTime(env.now):
+        yield env.timeout(1)
+
     req = employees.request()
     yield req
-    print(f"{env.now} A order is being processed")
-    yield env.timeout(3)
+
+    order.changeStatus(OrderStatus.PROCESSING)
+    logger.log(f"Order {order.id} is being processed", Utils.LogColor.YELLOW)
+
+    TIME_PER_ITEM = 2.0
+    TIME_SETUP = 1.5
+    DESV = 1.0
+
+    qtd_itens = len(order.products)
+
+    base_time = (qtd_itens * TIME_PER_ITEM) + TIME_SETUP
+    # normal dist
+    total_time = max(0.5, random.normalvariate(base_time, DESV))
+
+    yield env.timeout(total_time)
+
     employees.release(req)
-    print(f"{env.now} Order processed")
+    logger.log(
+        f"Order {order.id} processed in {total_time:.2f} min and ready to be shipped!",
+        Utils.LogColor.MAGENTA,
+    )
+    order.changeStatus(OrderStatus.PROCESSED)
+    order.addToDB()
+    readyToShipOrders.append(order)
 
 
 def orders():
     while True:
-        if chanceTo(0.55, True, False):
-            customer = Customer(db)
-            customer.addToDB()
-            print(f"{env.now} Customer {customer.name} ordered something!")
-            env.process(process_order(None))
-        yield env.timeout(1)
+        customer = Customer(db)
+        customer.addToDB()
+        order = customer.order(env=env)
+        logger.log(
+            f"Customer {customer.name} ordered products {order.products}!",
+            Utils.LogColor.BLUE,
+        )
+        env.process(processOrder(order))
+        yield env.timeout(Utils.getActualReceiveOrderTimeout(env))
+
+
+def truckPickup(truck: Truck):
+    global readyToShipOrders
+    with docks.request() as req:
+        yield req
+
+        logger.log(
+            f"{truck.type.name} Truck {truck.id} docked and started loading.",
+            Utils.LogColor.YELLOW,
+        )
+        truck.changeStatus(TruckStatus.Loading)
+
+        capacity = truck.type.value
+
+        loadedCount = 0
+        ordersLoaded = []
+        for i in range(len(readyToShipOrders)):
+            if i >= len(readyToShipOrders):
+                break
+            order = readyToShipOrders[i]
+            if order.totalUnits <= capacity - loadedCount:
+                orderToLoad = readyToShipOrders.pop(i)
+                yield env.timeout(len(orderToLoad.products))
+                loadedCount += orderToLoad.totalUnits
+                ordersLoaded.append(orderToLoad)
+                truck.orders.append(orderToLoad)
+            if loadedCount >= capacity:
+                break
+        if loadedCount > 0:
+            totalOrdersLoadedCount = len(ordersLoaded)
+            for order in ordersLoaded:
+                order.changeStatus(OrderStatus.SHIPPED)
+            logger.log(
+                f"{truck.type.name} Truck finished loading {loadedCount}/{capacity} product units with {totalOrdersLoadedCount} orders and left dock.",
+                Utils.LogColor.GREEN,
+            )
+            truck.changeStatus(TruckStatus.Shipped)
+            truck.addToDB()
+        else:
+            logger.log(
+                f"{truck.type.name} Truck left empty (no orders ready).",
+                Utils.LogColor.RED,
+            )
+
+
+def trucksArrival():
+    while True:
+        while not Utils.isWorkTime(env.now):
+            yield env.timeout(1)
+
+        truck = Truck(db, env)
+        truck.addToDB()
+
+        logger.log(f"{truck.type.name} Truck {truck.id} arrived!", Utils.LogColor.BLUE)
+
+        env.process(truckPickup(truck))
+
+        yield env.timeout(Utils.getActualTruckTimeout(env))
 
 
 env.process(orders())
+env.process(trucksArrival())
 
-env.run(until=50)
+env.run(until=60 * 24 * 7)
+
+
+db.plot_analytics()

@@ -1,11 +1,15 @@
 import random
+from enum import Enum
 
 import Storage
 import Utils
+from simpy import Environment
 
 nextCustomerID = 1
 nextSellerID = 1
 nextProductID = 1
+nextOrderID = 1
+nextTruckID = 1
 
 
 class CanBeAddedToDB:
@@ -34,6 +38,7 @@ class Product(CanBeAddedToDB):
         )
 
 
+# Will not be used!
 class StockItem:
     def __init__(self, db: Storage.DB, productID=None, quantity=None, price=None):
         self.db = db
@@ -51,6 +56,7 @@ class StockItem:
         )
 
 
+# Will not be used!
 class Seller(CanBeAddedToDB):
     def __init__(self, db: Storage.DB, id=None, name=None, stock=None):
         global nextSellerID
@@ -68,6 +74,39 @@ class Seller(CanBeAddedToDB):
                 self.stock.append(item.productID)
 
 
+class HasTrackedStatus:
+    def __init__(self):
+        self.env = None
+        self.status = None
+        self.timing = {}
+
+    def changeStatus(self, status: Enum):
+        self.status = status
+        self.timing[status] = self.env.now
+
+
+class Order(CanBeAddedToDB, HasTrackedStatus):
+    def __init__(
+        self,
+        db: Storage.DB,
+        env: Environment,
+        id=None,
+        customerID=None,
+        productsIDs=None,
+    ):
+        global nextOrderID
+        self.db = db
+        self.env = env
+        self.tableName = "orders"
+        self.id = id if id is not None else nextOrderID
+        nextOrderID += 1
+        self.customerID = customerID
+        self.products = productsIDs if productsIDs is not None else {}
+        self.status = Storage.OrderStatus.PENDING
+        self.timing = {Storage.OrderStatus.PENDING: env.now}
+        self.totalUnits = sum(self.products.values())
+
+
 class Customer(CanBeAddedToDB):
     def __init__(self, db: Storage.DB, id=None, name=None, demand=None):
         global nextCustomerID
@@ -78,6 +117,34 @@ class Customer(CanBeAddedToDB):
         self.name = name if name is not None else Utils.generateCustomerFullname()
         self.demand = demand if demand is not None else random.random()
 
-    def order(self, productsIDs: list[int] = []):
+    def order(self, env: Environment, productsIDs: list[int] = []):
         if len(productsIDs) == 0:
-            productsIDs = [random.randint(1, len(self.db.getTable("products")))]
+            productsIDs = Utils.generateOrderProducts(self.db)
+        order = Order(self.db, env, customerID=self.id, productsIDs=productsIDs)
+        order.addToDB()
+        return order
+
+
+class Truck(CanBeAddedToDB, HasTrackedStatus):
+    def __init__(self, db: Storage.DB, env: Environment, id=None, type=None):
+        global nextTruckID
+        self.db = db
+        self.env = env
+        self.status = Storage.TruckStatus.Arrived
+        self.tableName = "trucks"
+        self.id = id if id is not None else nextTruckID
+        nextTruckID += 1
+        self.type = (
+            type
+            if type is not None
+            else Utils.empiricalDist(
+                [
+                    Storage.TruckType.Small,
+                    Storage.TruckType.Medium,
+                    Storage.TruckType.Large,
+                ],
+                [0.35, 0.35, 0.3],
+            )
+        )
+        self.orders = []
+        self.timing = {Storage.TruckStatus.Arrived: self.env.now}

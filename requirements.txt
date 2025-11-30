@@ -1,1 +1,4 @@
 simpy==4.1.1
+rich==12.6.0
+matplotlib==3.7.1
+seaborn==0.13.1
