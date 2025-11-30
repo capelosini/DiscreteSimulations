@@ -25,6 +25,7 @@ first_names = [
     "Xander",
     "Yara",
     "Zoe",
+    "Walter",
 ]
 
 last_names = [
@@ -58,9 +59,16 @@ last_names = [
     "Young",
 ]
 
-DB = {
-    "customers": {},
-    "products": {},
-    "sellers": {},
-    "orders": [],
-}
+
+class DB:
+    def __init__(self):
+        self.customers = {}
+        self.products = {}
+        self.sellers = {}
+        self.orders = []
+
+    def getTable(self, tableName: str) -> dict | list:
+        return self.__dict__.get(tableName, {})
+
+    def addToTable(self, tableName, name, value) -> None:
+        self.__dict__.get(tableName, {}).update({name: value})

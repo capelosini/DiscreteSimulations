@@ -1,7 +1,7 @@
 import random
 
+import Storage
 import Utils
-from DB import DB
 
 nextCustomerID = 1
 nextSellerID = 1
@@ -12,14 +12,18 @@ class CanBeAddedToDB:
     def __init__(self):
         self.id = 0
         self.tableName = ""
+        self.db = Storage.DB()
 
     def addToDB(self):
-        DB[self.tableName][self.id] = self
+        self.db.addToTable(self.tableName, self.id, self)
 
 
 class Product(CanBeAddedToDB):
-    def __init__(self, id=None, name=None, demand=None, defaultPrice=None):
+    def __init__(
+        self, db: Storage.DB, id=None, name=None, demand=None, defaultPrice=None
+    ):
         global nextProductID
+        self.db = db
         self.tableName = "products"
         self.id = id if id is not None else nextProductID
         self.name = name if name is not None else "Product " + str(nextProductID)
@@ -31,14 +35,15 @@ class Product(CanBeAddedToDB):
 
 
 class StockItem:
-    def __init__(self, productID=None, quantity=None, price=None):
+    def __init__(self, db: Storage.DB, productID=None, quantity=None, price=None):
+        self.db = db
         self.productID = (
             productID
             if productID is not None
-            else random.randint(1, len(DB["products"]))
+            else random.randint(1, len(self.db.getTable("products")))
         )
         self.quantity = quantity if quantity is not None else random.randint(5, 200)
-        defaultPrice = DB["products"][self.productID].defaultPrice
+        defaultPrice = self.db.getTable("products")[self.productID].defaultPrice
         self.price = (
             price
             if price is not None
@@ -47,8 +52,9 @@ class StockItem:
 
 
 class Seller(CanBeAddedToDB):
-    def __init__(self, id=None, name=None, stock=None):
+    def __init__(self, db: Storage.DB, id=None, name=None, stock=None):
         global nextSellerID
+        self.db = db
         self.tableName = "sellers"
         self.id = id if id is not None else nextSellerID
         nextSellerID += 1
@@ -56,14 +62,22 @@ class Seller(CanBeAddedToDB):
         self.stock = stock if stock is not None else []
         if stock is None:
             for _ in range(random.randint(2, 5)):
-                self.stock.append(random.randint(1, 100))
+                item = StockItem(self.db)
+                while item.productID in self.stock:
+                    item = StockItem(self.db)
+                self.stock.append(item.productID)
 
 
 class Customer(CanBeAddedToDB):
-    def __init__(self, id=None, name=None, demand=None):
+    def __init__(self, db: Storage.DB, id=None, name=None, demand=None):
         global nextCustomerID
+        self.db = db
         self.tableName = "customers"
         self.id = id if id is not None else nextCustomerID
         nextCustomerID += 1
         self.name = name if name is not None else Utils.generateCustomerFullname()
         self.demand = demand if demand is not None else random.random()
+
+    def order(self, productsIDs: list[int] = []):
+        if len(productsIDs) == 0:
+            productsIDs = [random.randint(1, len(self.db.getTable("products")))]
