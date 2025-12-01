@@ -26,9 +26,11 @@ class LogColor(Enum):
 class Logger:
     def __init__(self, env: Environment):
         self.env = env
+        self.active = True
 
     def log(self, message: str, color: LogColor):
-        print(f"{color.value}{self.env.now:.3f}: {message}")
+        if self.active:
+            print(f"{color.value}{self.env.now:.3f}: {message}")
 
 
 def generateCustomerFullname():

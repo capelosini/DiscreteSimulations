@@ -11,13 +11,13 @@ db = DB()
 for _ in range(20):
     product = Product(db)
     product.addToDB()
-    print(product.__dict__)
 
-env = simpy.Environment()
-employees = simpy.Resource(env, capacity=30)
+env = simpy.Environment(60 * 6)
+employees = simpy.Resource(env, capacity=50)
 docks = simpy.Resource(env, capacity=6)
 
 logger = Utils.Logger(env)
+# logger.active = False
 
 readyToShipOrders = []
 
@@ -32,8 +32,8 @@ def processOrder(order: Order):
     order.changeStatus(OrderStatus.PROCESSING)
     logger.log(f"Order {order.id} is being processed", Utils.LogColor.YELLOW)
 
-    TIME_PER_ITEM = 2.0
-    TIME_SETUP = 1.5
+    TIME_PER_ITEM = 1.5
+    TIME_SETUP = 1
     DESV = 1.0
 
     qtd_itens = len(order.products)
@@ -129,7 +129,7 @@ def trucksArrival():
 env.process(orders())
 env.process(trucksArrival())
 
-env.run(until=60 * 24 * 7)
+env.run(until=60 * 18)
 
 
 db.plot_analytics()

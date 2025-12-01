@@ -117,16 +117,18 @@ class DB:
             proc_start = o.timing.get(OrderStatus.PROCESSING)
             proc_end = o.timing.get(OrderStatus.PROCESSED)
 
+            lead_time = (end_time - start_time) if (end_time and start_time) else None
+            process_duration = (
+                (proc_end - proc_start) if (proc_end and proc_start) else None
+            )
+
             row = {
                 "id": o.id,
                 "status": o.status.name,
                 "start_time": start_time,
-                "lead_time": (end_time - start_time)
-                if (end_time and start_time)
-                else None,
-                "process_duration": (proc_end - proc_start)
-                if (proc_end and proc_start)
-                else None,
+                "shipped_time": end_time,  # Needed for max time calculation
+                "lead_time": lead_time,
+                "process_duration": process_duration,
             }
             order_data.append(row)
         df_orders = pd.DataFrame(order_data)
@@ -136,11 +138,7 @@ class DB:
         for t in self.trucks.values():
             arrived = t.timing.get(TruckStatus.Arrived)
             shipped = t.timing.get(TruckStatus.Shipped)
-
-            # Calculate Wait Time (Turnaround Time)
-            wait_time = None
-            if arrived is not None and shipped is not None:
-                wait_time = shipped - arrived
+            wait_time = (shipped - arrived) if (arrived and shipped) else None
 
             row = {
                 "id": t.id,
@@ -155,25 +153,67 @@ class DB:
 
         # 2. PLOTTING
         # ---------------------------------------------------------
-        # Changed layout to 3 rows, 2 columns to fit new graphs
         fig, axes = plt.subplots(3, 2, figsize=(14, 15))
         fig.suptitle("Logistics Simulation Dashboard", fontsize=16)
 
-        # --- Plot 1: Order Lead Time Distribution ---
-        if not df_orders.empty and "lead_time" in df_orders.columns:
+        # CALCULATE METRICS
+        avg_lead_time = 0
+        median_lead_time = 0
+        throughput_per_hour = 0
+        arrival_per_hour = 0
+
+        if not df_orders.empty:
+            # Determine total simulation time based on last event
+            max_time_orders = df_orders["shipped_time"].max()
+            max_time_arrival = df_orders["start_time"].max()
+            total_sim_time = max(
+                max_time_orders if pd.notna(max_time_orders) else 0,
+                max_time_arrival if pd.notna(max_time_arrival) else 0,
+            )
+
+            # --- Rate Calculations ---
+            total_shipped = len(df_orders.dropna(subset=["lead_time"]))
+            total_created = len(df_orders)
+
+            if total_sim_time > 0:
+                # Calculate per Hour (assuming sim time is in minutes)
+                throughput_per_hour = (total_shipped / total_sim_time) * 60
+                arrival_per_hour = (total_created / total_sim_time) * 60
+
             completed_orders = df_orders.dropna(subset=["lead_time"])
+
             if not completed_orders.empty:
+                avg_lead_time = completed_orders["lead_time"].mean()
+                median_lead_time = completed_orders["lead_time"].median()
+
+                # --- Plot 1: Lead Time Distribution ---
                 axes[0, 0].hist(
                     completed_orders["lead_time"],
-                    bins=20,
+                    bins=25,
                     color="skyblue",
-                    edgecolor="black",
+                    edgecolor="white",
+                    alpha=0.8,
+                    label="Lead Time",
                 )
-                axes[0, 0].set_title("Order Lead Time Distribution (Customer Wait)")
-                axes[0, 0].set_xlabel("Minutes")
+                axes[0, 0].axvline(
+                    median_lead_time,
+                    color="purple",
+                    linestyle="-",
+                    linewidth=3,
+                    label=f"Median: {median_lead_time:.1f}m",
+                )
+                axes[0, 0].axvline(
+                    avg_lead_time,
+                    color="red",
+                    linestyle="--",
+                    linewidth=2,
+                    label=f"Avg: {avg_lead_time:.1f}m",
+                )
+                axes[0, 0].set_title("Customer Wait Time Distribution")
                 axes[0, 0].set_ylabel("Frequency")
+                axes[0, 0].legend()
 
-        # --- Plot 2: Processing vs Waiting Time (Bottleneck Check) ---
+        # --- Plot 2: Processing vs Waiting Time ---
         if not df_orders.empty:
             sample = df_orders.head(50).dropna(subset=["lead_time", "process_duration"])
             if not sample.empty:
@@ -182,14 +222,16 @@ class DB:
                     sample["lead_time"],
                     label="Total Lead Time",
                     marker="o",
+                    alpha=0.5,
                 )
                 axes[0, 1].plot(
                     sample["id"],
                     sample["process_duration"],
-                    label="Active Work Time",
+                    label="Work Time",
                     marker="x",
+                    color="green",
                 )
-                axes[0, 1].set_title("Total vs Active Time (First 50 Orders)")
+                axes[0, 1].set_title("Total vs Work Time (First 50 Orders)")
                 axes[0, 1].legend()
 
         # --- Plot 3: Truck Fleet Composition ---
@@ -219,54 +261,50 @@ class DB:
                 color="green",
                 lw=2,
             )
-            axes[1, 1].set_title("Throughput: Cumulative Orders Shipped")
+            axes[1, 1].set_title(
+                f"Throughput (Avg: {throughput_per_hour:.1f} orders/h)"
+            )  # Added to Title
             axes[1, 1].set_xlabel("Simulation Time")
             axes[1, 1].grid(True)
 
-        # --- [NEW] Plot 5: Truck Turnaround Time (Arrived -> Shipped) ---
+        # --- Plot 5: Truck Turnaround Time ---
         if not df_trucks.empty and "wait_time" in df_trucks.columns:
             completed_trucks = df_trucks.dropna(subset=["wait_time"])
-
             if not completed_trucks.empty:
-                # Scatter plot: X axis = When they arrived, Y axis = How long they waited
-                # This helps visualize if the dock gets congested later in the day
-                sc = axes[2, 0].scatter(
+                axes[2, 0].scatter(
                     completed_trucks["arrival_time"],
                     completed_trucks["wait_time"],
                     c="orange",
                     edgecolor="black",
-                    s=50,
                     alpha=0.7,
                 )
-                axes[2, 0].set_title("Truck Turnaround Time (Wait + Load)")
-                axes[2, 0].set_xlabel("Time of Arrival (Sim Time)")
-                axes[2, 0].set_ylabel("Duration at Dock (Minutes)")
+                axes[2, 0].set_title("Truck Turnaround Time")
+                axes[2, 0].set_xlabel("Arrival Time")
+                axes[2, 0].set_ylabel("Wait Time (min)")
                 axes[2, 0].grid(True, linestyle="--")
 
-                # Add a trend line or average line
-                avg_wait = completed_trucks["wait_time"].mean()
-                axes[2, 0].axhline(
-                    y=avg_wait, color="r", linestyle="-", label=f"Avg: {avg_wait:.1f}m"
-                )
-                axes[2, 0].legend()
-            else:
-                axes[2, 0].text(
-                    0.5, 0.5, "No trucks completed loading yet", ha="center"
-                )
+        # --- Plot 6: Summary Text ---
+        axes[2, 1].axis("off")
 
-        # --- Plot 6: Empty (or Summary Text) ---
-        axes[2, 1].axis("off")  # Hide the empty 6th slot
-
-        # Summary Statistics text in the empty slot
         summary_text = (
-            f"SIMULATION SUMMARY\n"
+            f"SIMULATION METRICS\n"
             f"------------------\n"
-            f"Total Orders: {len(df_orders)}\n"
-            f"Shipped Orders: {len(df_orders.dropna(subset=['lead_time']))}\n"
-            f"Total Trucks Arrived: {len(df_trucks)}\n"
-            f"Trucks Fully Served: {len(df_trucks.dropna(subset=['wait_time']))}\n"
+            f"Orders Shipped: {len(df_orders.dropna(subset=['lead_time']))}\n"
+            f"\n"
+            f"SYSTEM RATES (Speed):\n"
+            f"Demand (In):   {arrival_per_hour:.1f} orders/hour\n"
+            f"Capacity (Out):{throughput_per_hour:.1f} orders/hour\n"  # NEW METRIC
+            f"\n"
+            f"WAIT TIME:\n"
+            f"Median: {median_lead_time:.2f} min\n"
+            f"Average:{avg_lead_time:.2f} min\n"
         )
-        axes[2, 1].text(0.1, 0.5, summary_text, fontsize=12, family="monospace")
+
+        # Add warning if system is overloaded
+        if arrival_per_hour > throughput_per_hour:
+            summary_text += f"\n[!] WARNING: DEMAND > CAPACITY\n    Backlog is growing!"
+
+        axes[2, 1].text(0.1, 0.3, summary_text, fontsize=12, family="monospace")
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
